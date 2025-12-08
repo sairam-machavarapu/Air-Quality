@@ -304,7 +304,7 @@ def page_model():
     model = train_model(X_train, y_train)
     preds = model.predict(X_test)
 
-    rmse = mean_squared_error(y_test, preds, squared=False)
+    rmse = mean_squared_error(y_test, preds, squared=True) ** 0.5
     r2 = r2_score(y_test, preds)
 
     st.metric("RMSE", f"{rmse:.2f}")
