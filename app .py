@@ -257,7 +257,7 @@ def page_maps():
             fill=True,
             fill_opacity=0.7,
             popup=f"{r['City']} — AQI: {aqi:.1f}"
-        ).).add_to(m)
+        ).add_to(m)
 
     st_folium(m, width=900, height=500)
 
