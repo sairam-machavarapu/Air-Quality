@@ -572,6 +572,85 @@ def page_model(df):
 
         st.success(f"🌟 Predicted AQI: **{predicted_aqi:.2f}**")
 
+#  About Page
+
+def page_about():
+    st.title("📘 About This Project")
+
+    st.markdown("""
+    ## 🌍 India Air Quality Explorer
+
+    This interactive dashboard visualizes **India’s air pollution trends**, geographical
+    patterns, and predicts AQI using machine learning models.  
+    It is built as an end-to-end data science and geospatial analytics project.
+
+    ---
+
+    ## 📊 Dataset Details
+
+    - **Source:** Continuous Ambient Air Quality Monitoring Stations (CAAQMS)  
+    - **Cities Covered:** 26 major Indian cities  
+    - **Data Type:** Hourly/continuous pollutant readings  
+    - **Total Records:** ~30,000 rows  
+    - **Main Pollutants Included:**  
+      - PM2.5, PM10  
+      - NO, NO2, NOx  
+      - CO, SO2, NH3  
+      - O3  
+      - Benzene, Toluene, Xylene  
+      - **AQI (Air Quality Index)**  
+
+    ---
+
+    ## 🧠 Features of This Application
+
+    ### **1. Data Overview**
+    - Summary statistics  
+    - First 50 rows preview  
+
+    ### **2. EDA (Exploratory Data Analysis)**
+    - Monthly and yearly trends  
+    - Seasonal and weekday patterns  
+    - Distribution plots, boxplots  
+    - City-wise pollutant comparison  
+    - Correlation heatmaps  
+
+    ### **3. Geographical Maps**
+    - AQI marker maps  
+    - Pollutant heatmaps  
+    - Fast marker clusters  
+    - Custom base map themes  
+
+    ### **4. Machine Learning Model**
+    - Multiple model selection:  
+      **Random Forest, Extra Trees, Decision Tree, Linear Regression**  
+    - Train/test split selection  
+    - Feature importance  
+    - Predicted vs Actual comparison  
+    - User input prediction form  
+
+    ---
+
+    ## 🎯 Purpose of the Project
+
+    This project aims to:
+
+    - Understand India’s air pollution patterns  
+    - Visualize city-level pollution hotpots  
+    - Build ML models to predict AQI  
+    - Provide interactive tools for environmental analysis  
+    - Raise awareness on air quality and its impact  
+
+    ---
+
+    ## 👨‍💻 Author
+
+    **Vamsi**  
+    Developing intelligent data apps using Python, Streamlit, and machine learning.
+
+    If you want to extend this app further (forecasting, alerts, ML explainability), just ask!
+    """)
+
 
 # -----------------------------
 # MAIN ROUTER
@@ -581,7 +660,7 @@ def main():
     df = preprocess(df_raw)
 
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home", "Data Overview", "EDA", "Maps", "Model"])
+    page = st.sidebar.radio("Go to", ["Home", "Data Overview", "EDA", "Maps", "Model", "About"])
 
     if page == "Home": page_home(df, files)
     elif page == "Data Overview": page_data_overview(df)
