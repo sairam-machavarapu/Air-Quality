@@ -7,4 +7,4 @@ folium
 streamlit-folium
 scikit-learn
 xgboost
-joblib
+watchdog
