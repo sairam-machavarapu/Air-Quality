@@ -6,5 +6,5 @@ seaborn
 folium
 streamlit-folium
 scikit-learn
-xgboost
 watchdog
+
