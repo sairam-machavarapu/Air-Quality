@@ -772,11 +772,8 @@ def page_about():
 
     ## 👨‍💻 Author
 
-    **Vamsi**  
-    Developing intelligent data apps using Python, Streamlit, and machine learning.
-
-    If you want to extend this app further (forecasting, alerts, ML explainability), just ask!
-    """)
+    **Chappidi Vamsi Krishna **  
+    Developing intelligent data apps using Python, Streamlit, and machine learning.""")
 
 
 # -----------------------------
