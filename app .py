@@ -1,7 +1,3 @@
-# =========================================================
-# app.py (Final Optimized Version)
-# =========================================================
-
 import streamlit as st
 st.set_page_config(
     page_title="India Air Quality Explorer",
@@ -18,16 +14,21 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import HeatMap, MarkerCluster
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import warnings
 warnings.filterwarnings("ignore")
 
+# Optional XGBoost
+try:
+    from xgboost import XGBRegressor
+    xgb_available = True
+except:
+    xgb_available = False
 
-# =========================================================
-# CONSTANTS & CITY COORDINATES
-# =========================================================
 
+# -----------------------------
+# CONSTANTS
+# -----------------------------
 POLLUTANTS = [
     "PM2.5","PM10","NO","NO2","NOx","NH3","CO","SO2",
     "O3","Benzene","Toluene","Xylene","AQI"
@@ -50,13 +51,11 @@ CITY_COORDS = {
 }
 
 
-# =========================================================
-# DATA LOADING
-# =========================================================
-
-@st.cache_data(show_spinner=False)
+# -----------------------------
+# LOAD DATA
+# -----------------------------
+@st.cache_data
 def load_dataset(folder="./dataset"):
-    """Load all CSVs from dataset folder."""
     if not os.path.exists(folder):
         return pd.DataFrame(), []
 
@@ -65,316 +64,207 @@ def load_dataset(folder="./dataset"):
 
     for f in files:
         try:
-            df_temp = pd.read_csv(os.path.join(folder, f))
-            df_temp["__source"] = f
-            dfs.append(df_temp)
+            df_tmp = pd.read_csv(os.path.join(folder, f))
+            df_tmp["__source"] = f
+            dfs.append(df_tmp)
         except Exception as e:
-            st.warning(f"Error reading {f}: {e}")
-            continue
+            st.warning(f"Failed reading {f}: {e}")
 
-    if len(dfs) == 0:
+    if not dfs:
         return pd.DataFrame(), files
 
     return pd.concat(dfs, ignore_index=True), files
 
 
-# =========================================================
-# PREPROCESSING
-# =========================================================
-
-@st.cache_data(show_spinner=False)
+# -----------------------------
+# PREPROCESS
+# -----------------------------
+@st.cache_data
 def preprocess(df):
-    """Clean data, convert types, fill missing values, add date features."""
     if df.empty:
         return df
 
     df = df.copy()
     df.columns = df.columns.str.strip()
 
-    # Convert date
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    if "Date" in df.columns:
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
-    # Convert pollutants
-    for col in POLLUTANTS:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    present = []
+    for c in POLLUTANTS:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+            present.append(c)
 
-    # Drop rows missing city/date
-    df = df.dropna(subset=["City", "Date"]).sort_values(["City", "Date"])
+    df = df.dropna(subset=["City","Date"])
+    df = df.sort_values(["City","Date"])
 
-    # Fill missing per city
-    present = [c for c in POLLUTANTS if c in df.columns]
+    # Impute per city
     df[present] = df.groupby("City")[present].transform(lambda g: g.ffill().bfill())
+    for c in present:
+        df[c] = df[c].fillna(df[c].median())
 
-    for col in present:
-        df[col] = df[col].fillna(df[col].median())
-
-    # Date features
     df["Year"] = df["Date"].dt.year
     df["Month"] = df["Date"].dt.month
     df["Day"] = df["Date"].dt.day
     df["Weekday"] = df["Date"].dt.weekday
 
-    # City code
     df["City"] = df["City"].astype("category")
     df["City_Code"] = df["City"].cat.codes
 
     return df.reset_index(drop=True)
 
 
-# =========================================================
-# PAGE: HOME
-# =========================================================
-
+# -----------------------------
+# HOME
+# -----------------------------
 def page_home(df, files):
     st.title("India Air Quality Explorer")
-
-    st.markdown("""
-Welcome!  
-This platform allows you to explore, visualize and model India's air quality data across multiple cities.
-
-Upload your CSVs into `/dataset` folder.
-""")
-
-    if df.empty:
-        st.error("No data found.")
-    else:
-        st.success(f"Loaded {len(files)} files • {len(df):,} total rows")
-        st.write(files)
+    st.success(f"Dataset loaded: {len(files)} files — {len(df):,} rows.")
 
 
-# =========================================================
-# PAGE: ABOUT
-# =========================================================
-
+# -----------------------------
+# ABOUT
+# -----------------------------
 def page_about():
-    st.title("About This Project")
-
+    st.title("About")
     st.markdown("""
-This dashboard provides complete analysis of multi-city air quality data.
-
-### ✔ Features
-- Pollutant-wise EDA  
-- City trends & seasonal patterns  
-- Geographical maps (AQI & PM2.5)  
-- AQI Prediction using Machine Learning  
-- Clean preprocessing pipeline  
-
-### ✔ Pollutants Included
-PM2.5, PM10, NO, NO2, NOx, NH3, CO, SO2, O3, Benzene, Toluene, Xylene, AQI
-
-### ✔ Data Notes
-- Missing values filled *per city*  
-- Chronological ordering maintained  
-- Numerical consistency ensured  
-""")
+    This app visualizes and predicts Indian air quality using open-source data.
+    """)
 
 
-# =========================================================
-# PAGE: DATA OVERVIEW
-# =========================================================
-
+# -----------------------------
+# DATA OVERVIEW
+# -----------------------------
 def page_data_overview(df):
     st.header("Data Overview")
-
-    if df.empty:
-        st.error("Dataset Empty")
-        return
-
-    st.subheader("Column Types")
-    st.write(df.dtypes)
-
-    st.subheader("Summary Statistics")
     st.write(df.describe().T)
+    st.write(df.head(50))
 
 
-# =========================================================
-# PAGE: EDA
-# =========================================================
-
+# -----------------------------
+# EDA
+# -----------------------------
 def page_eda(df):
     st.header("Exploratory Data Analysis")
 
     cities = ["All"] + sorted(df["City"].unique())
-    pollutant = st.sidebar.selectbox("Pollutant", POLLUTANTS)
-    city = st.sidebar.selectbox("City", cities)
+    city_sel = st.sidebar.selectbox("City", cities)
 
-    date_min, date_max = df["Date"].min(), df["Date"].max()
-    dr = st.sidebar.date_input("Date Range", [date_min, date_max])
-    start, end = pd.to_datetime(dr[0]), pd.to_datetime(dr[1])
+    pollutants = [c for c in POLLUTANTS if c in df.columns]
+    pollutant = st.sidebar.selectbox("Pollutant", pollutants)
 
-    df_f = df[(df["Date"] >= start) & (df["Date"] <= end)]
-    if city != "All":
-        df_f = df_f[df_f["City"] == city]
+    df_f = df if city_sel=="All" else df[df["City"]==city_sel]
 
-    # Summary
-    st.subheader(f"{pollutant} Summary")
-    st.write(df_f[pollutant].describe())
+    # Trend plot
+    monthly = df_f.set_index("Date").groupby(pd.Grouper(freq="M"))[pollutant].mean()
 
-    # Monthly trend
-    temp = df_f.set_index("Date").groupby(pd.Grouper(freq="M"))[pollutant].mean()
-    fig, ax = plt.subplots(figsize=(10, 3))
-    ax.plot(temp.index, temp.values, marker="o")
+    fig, ax = plt.subplots(figsize=(10,4))
+    ax.plot(monthly.index, monthly.values, marker="o")
     st.pyplot(fig)
 
-    # Boxplot
-    fig2, ax2 = plt.subplots(figsize=(10, 3))
-    sns.boxplot(data=df_f, x="Month", y=pollutant)
-    st.pyplot(fig2)
 
-    # Correlation
-    fig3, ax3 = plt.subplots(figsize=(8, 5))
-    sns.heatmap(df_f[POLLUTANTS].corr(), cmap="coolwarm")
-    st.pyplot(fig3)
-
-
-# =========================================================
-# PAGE: MAPS
-# =========================================================
-
+# -----------------------------
+# MAPS  (FIXED ERROR)
+# -----------------------------
 def page_maps(df):
     st.header("Geographical Maps")
 
-    df["Latitude"] = df["City"].map(lambda c: CITY_COORDS.get(c, [None,None])[0])
-    df["Longitude"] = df["City"].map(lambda c: CITY_COORDS.get(c, [None,None])[1])
+    df = df.copy()
+    df["Latitude"] = df["City"].map(lambda c: CITY_COORDS.get(c,[None,None])[0])
+    df["Longitude"] = df["City"].map(lambda c: CITY_COORDS.get(c,[None,None])[1])
 
     df_geo = df.dropna(subset=["Latitude","Longitude"])
-    if df_geo.empty:
-        st.error("No coordinate data available.")
-        return
 
-    map_type = st.sidebar.selectbox(
-        "Map Type",
-        ["Geographical AQI Map", "PM2.5 Heatmap", "City Marker Cluster"]
-    )
+    # Force numeric to avoid category-type aggregation error
+    df_geo["Latitude"] = pd.to_numeric(df_geo["Latitude"], errors="coerce")
+    df_geo["Longitude"] = pd.to_numeric(df_geo["Longitude"], errors="coerce")
+    df_geo["AQI"] = pd.to_numeric(df_geo["AQI"], errors="coerce")
 
-    center = [22.97, 78.65]
+    # Correct aggregation
+    stats = df_geo.groupby("City").agg({
+        "AQI": "mean",
+        "Latitude": "first",
+        "Longitude": "first"
+    }).reset_index()
 
-    if map_type == "Geographical AQI Map":
-        m = folium.Map(location=center, zoom_start=5)
-        stats = df_geo.groupby("City")[["AQI","Latitude","Longitude"]].mean()
+    m = folium.Map(location=[22.97,78.65], zoom_start=5)
 
-        for city, r in stats.iterrows():
-            aqi, lat, lon = r["AQI"], r["Latitude"], r["Longitude"]
-            if aqi <= 100: color = "green"
-            elif aqi <= 200: color = "orange"
-            else: color = "red"
-            folium.CircleMarker(
-                [lat, lon],
-                radius=max(6, min(25, aqi/10)),
-                color=color,
-                fill=True,
-                popup=f"{city} — AQI {aqi:.1f}"
-            ).add_to(m)
+    for _, r in stats.iterrows():
+        aqi = r["AQI"]
+        lat, lon = r["Latitude"], r["Longitude"]
 
-        st_folium(m, width=900, height=500)
+        color = "green" if aqi<=100 else "orange" if aqi<=200 else "red"
 
-    elif map_type == "PM2.5 Heatmap":
-        m = folium.Map(location=center, zoom_start=5)
-        heat = df_geo[["Latitude", "Longitude", "PM2.5"]].dropna()
-        HeatMap(heat.values.tolist()).add_to(m)
-        st_folium(m, width=900, height=500)
+        folium.CircleMarker(
+            [lat, lon],
+            radius=max(6, min(25, aqi/10)),
+            color=color,
+            fill=True,
+            fill_opacity=0.7,
+            popup=f"{r['City']} — AQI {aqi:.1f}"
+        ).add_to(m)
 
-    else:
-        m = folium.Map(location=center, zoom_start=5)
-        cluster = MarkerCluster().add_to(m)
-        for _, r in df_geo.iterrows():
-            folium.Marker(
-                [r["Latitude"], r["Longitude"]],
-                popup=f"{r['City']} — AQI {r['AQI']}"
-            ).add_to(cluster)
-        st_folium(m, width=900, height=500)
+    st_folium(m, width=900, height=500)
 
 
-# =========================================================
-# PAGE: MODEL (FASTEST + CLEAN)
-# =========================================================
-
+# -----------------------------
+# MODEL (FIXED ERROR)
+# -----------------------------
 def page_model(df):
     st.header("AQI Prediction Model")
 
-    pollutant_features = [c for c in POLLUTANTS if c != "AQI"]
-    date_feats = ["Year", "Month", "Day", "Weekday"]
-    FEATURES = pollutant_features + date_feats + ["City_Code"]
+    FEATURES = [c for c in POLLUTANTS if c!="AQI" and c in df.columns]
+    FEATURES += ["Year","Month","Day","Weekday","City_Code"]
 
-    # Prepare data
-    X = df[FEATURES].apply(pd.to_numeric, errors="coerce").fillna(df.median(numeric_only=True))
+    X = df[FEATURES].fillna(df[FEATURES].median())
     y = df["AQI"].fillna(df["AQI"].median())
 
-    # Train-test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
 
-    # Downsampling if dataset is huge
-    if len(X_train) > 20000:
-        X_train = X_train.sample(20000, random_state=42)
-        y_train = y_train.loc[X_train.index]
+    # Use XGBoost if available
+    if xgb_available:
+        model = XGBRegressor(
+            n_estimators=250,
+            learning_rate=0.1,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42
+        )
+    else:
+        from sklearn.ensemble import RandomForestRegressor
+        model = RandomForestRegressor(n_estimators=200, random_state=42)
 
-    # Train Model
-    model = RandomForestRegressor(
-        n_estimators=200,
-        random_state=42,
-        n_jobs=-1
-    )
-
-    with st.spinner("Training model..."):
-        model.fit(X_train, y_train)
-
+    model.fit(X_train, y_train)
     preds = model.predict(X_test)
-    rmse = mean_squared_error(y_test, preds, squared=False)
+
+    # *** FIXED RMSE (no squared flag) ***
+    rmse = np.sqrt(mean_squared_error(y_test, preds))
     r2 = r2_score(y_test, preds)
 
-    col1, col2 = st.columns(2)
-    col1.metric("RMSE", f"{rmse:.2f}")
-    col2.metric("R²", f"{r2:.3f}")
-
-    # Manual Prediction UI
-    st.subheader("Manual AQI Prediction")
-
-    with st.form("predict_form"):
-        user_vals = {}
-        for feat in pollutant_features:
-            user_vals[feat] = st.number_input(feat, value=float(df[feat].median()))
-
-        date = st.date_input("Date")
-        city = st.selectbox("City", sorted(df["City"].unique()))
-        city_code = int(df[df["City"] == city]["City_Code"].mode().iloc[0])
-
-        submitted = st.form_submit_button("Predict")
-
-        if submitted:
-            row = [user_vals[f] for f in pollutant_features]
-            row += [date.year, date.month, date.day, date.weekday(), city_code]
-
-            pred_value = model.predict(np.array(row).reshape(1, -1))[0]
-            st.success(f"Predicted AQI: {pred_value:.1f}")
+    st.metric("RMSE", f"{rmse:.2f}")
+    st.metric("R²", f"{r2:.3f}")
 
 
-# =========================================================
+# -----------------------------
 # MAIN ROUTER
-# =========================================================
-
+# -----------------------------
 def main():
     df_raw, files = load_dataset()
     df = preprocess(df_raw)
 
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go To", ["Home", "Data Overview", "EDA", "Maps", "Model", "About"])
+    page = st.sidebar.radio("Go to", ["Home","Data Overview","EDA","Maps","Model","About"])
 
-    if page == "Home":
-        page_home(df, files)
-    elif page == "Data Overview":
-        page_data_overview(df)
-    elif page == "EDA":
-        page_eda(df)
-    elif page == "Maps":
-        page_maps(df)
-    elif page == "Model":
-        page_model(df)
-    elif page == "About":
-        page_about()
-
+    if page=="Home": page_home(df, files)
+    elif page=="Data Overview": page_data_overview(df)
+    elif page=="EDA": page_eda(df)
+    elif page=="Maps": page_maps(df)
+    elif page=="Model": page_model(df)
+    elif page=="About": page_about()
 
 if __name__ == "__main__":
     main()
