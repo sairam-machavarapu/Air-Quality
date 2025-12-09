@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 st.set_page_config(
     page_title="India Air Quality Explorer",
@@ -22,9 +23,8 @@ warnings.filterwarnings("ignore")
 try:
     from xgboost import XGBRegressor
     xgb_available = True
-except:
+except Exception:
     xgb_available = False
-
 
 # -----------------------------
 # CONSTANTS
@@ -34,6 +34,7 @@ POLLUTANTS = [
     "O3","Benzene","Toluene","Xylene","AQI"
 ]
 
+# city coordinates (fallback list)
 CITY_COORDS = {
     "Thiruvananthapuram":[8.5241,76.9366], "Shillong":[25.5788,91.8933],
     "Jaipur":[26.9124,75.7873], "Mumbai":[19.0760,72.8777],
@@ -50,181 +51,331 @@ CITY_COORDS = {
     "Bhopal":[23.2599,77.4126], "Brajrajnagar":[21.8160,83.9008]
 }
 
-
 # -----------------------------
 # LOAD DATA
 # -----------------------------
 @st.cache_data
-def load_dataset(folder="./dataset"):
+def load_dataset(folder="dataset"):
+    """
+    Load all CSV files from the given folder and return concatenated DataFrame and file list.
+    Returns (df, files, errors)
+    """
+    errors = []
     if not os.path.exists(folder):
-        return pd.DataFrame(), []
+        return pd.DataFrame(), [], [f"Folder not found: {folder}"]
 
     files = [f for f in os.listdir(folder) if f.lower().endswith(".csv")]
-    dfs = []
+    if not files:
+        return pd.DataFrame(), files, [f"No CSV files found in {folder}"]
 
+    dfs = []
     for f in files:
+        path = os.path.join(folder, f)
         try:
-            df_tmp = pd.read_csv(os.path.join(folder, f))
+            df_tmp = pd.read_csv(path)
+            if df_tmp.empty:
+                errors.append(f"{f}: empty file")
+                continue
             df_tmp["__source"] = f
             dfs.append(df_tmp)
         except Exception as e:
-            st.warning(f"Failed reading {f}: {e}")
+            errors.append(f"{f}: {str(e)}")
 
     if not dfs:
-        return pd.DataFrame(), files
+        return pd.DataFrame(), files, errors
 
-    return pd.concat(dfs, ignore_index=True), files
-
+    try:
+        combined = pd.concat(dfs, ignore_index=True)
+        return combined, files, errors
+    except Exception as e:
+        return pd.DataFrame(), files, [f"Failed concatenation: {e}"]
 
 # -----------------------------
 # PREPROCESS
 # -----------------------------
 @st.cache_data
 def preprocess(df):
-    if df.empty:
-        return df
+    """
+    Clean dataset and return a cleaned DataFrame.
+    Performs:
+      - strip column names
+      - require City and Date
+      - parse Date
+      - numeric conversion of known pollutant columns
+      - per-city forward/backward fill and median fallback
+      - extract Year/Month/Day/Weekday and City_Code
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
 
     df = df.copy()
     df.columns = df.columns.str.strip()
 
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    # Basic required columns
+    if "City" not in df.columns or "Date" not in df.columns:
+        # cannot proceed if City or Date are missing
+        return pd.DataFrame()
 
+    # Parse date
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+
+    # Trim spaces in City and drop rows lacking city or date
+    df["City"] = df["City"].astype(str).str.strip()
+    df = df.dropna(subset=["City", "Date"]).reset_index(drop=True)
+    if df.empty:
+        return pd.DataFrame()
+
+    # Ensure pollutant columns exist and convert to numeric
     present = []
     for c in POLLUTANTS:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
             present.append(c)
 
-    df = df.dropna(subset=["City","Date"])
-    df = df.sort_values(["City","Date"])
+    # Grouped imputation per city for the present pollutant columns
+    if present:
+        df[present] = df.groupby("City")[present].transform(lambda g: g.ffill().bfill())
+        # fill any remaining NaNs with column median (global)
+        for c in present:
+            median = df[c].median(skipna=True)
+            if pd.isna(median):
+                median = 0.0
+            df[c] = df[c].fillna(median)
 
-    # Impute per city
-    df[present] = df.groupby("City")[present].transform(lambda g: g.ffill().bfill())
-    for c in present:
-        df[c] = df[c].fillna(df[c].median())
-
+    # Date features
     df["Year"] = df["Date"].dt.year
     df["Month"] = df["Date"].dt.month
     df["Day"] = df["Date"].dt.day
     df["Weekday"] = df["Date"].dt.weekday
 
+    # City codes
     df["City"] = df["City"].astype("category")
     df["City_Code"] = df["City"].cat.codes
 
+    # Reset index
     return df.reset_index(drop=True)
 
 
 # -----------------------------
-# HOME
+# PAGE: HOME
 # -----------------------------
-def page_home(df, files):
+def page_home(df, files, errors):
     st.title("India Air Quality Explorer")
-    st.success(f"Dataset loaded: {len(files)} files — {len(df):,} rows.")
+    if errors:
+        st.warning("Some issues were found when loading files:")
+        for e in errors:
+            st.warning(f"- {e}")
 
+    if df is None or df.empty:
+        st.error("No valid dataset loaded. Please add CSV files to the `dataset/` folder with columns at least: City, Date, AQI (recommended).")
+        st.markdown("**CSV tips:** column headers should include `City` and `Date` (YYYY-MM-DD or similar). Pollutant columns should match names like `PM2.5`, `PM10`, etc.")
+        return
+
+    st.success(f"Loaded {len(files)} file(s) — dataset has {len(df):,} rows and {len(df.columns)} columns.")
+    st.write("Sample rows:")
+    st.dataframe(df.head(10))
 
 # -----------------------------
-# ABOUT
+# PAGE: ABOUT
 # -----------------------------
 def page_about():
     st.title("About")
     st.markdown("""
     This app visualizes and predicts Indian air quality using open-source data.
+    - Drop CSV files into the `dataset/` folder.
+    - Required columns: `City`, `Date`.
+    - Recommended: pollutant columns like `PM2.5`, `PM10`, `NO2`, `AQI`.
     """)
-
+    st.markdown("Built with Streamlit — rewritten for robustness.")
 
 # -----------------------------
-# DATA OVERVIEW
+# PAGE: DATA OVERVIEW
 # -----------------------------
 def page_data_overview(df):
     st.header("Data Overview")
-    st.write(df.describe().T)
-    st.write(df.head(50))
+    if df is None or df.empty:
+        st.info("No data to show.")
+        return
 
+    numeric = df.select_dtypes(include=[np.number])
+    if numeric.empty:
+        st.info("No numeric columns to describe.")
+    else:
+        st.dataframe(numeric.describe().T)
+
+    st.subheader("First 100 rows")
+    st.dataframe(df.head(100))
 
 # -----------------------------
-# EDA
+# PAGE: EDA
 # -----------------------------
 def page_eda(df):
     st.header("Exploratory Data Analysis")
+    if df is None or df.empty:
+        st.info("No data available for EDA.")
+        return
 
-    cities = ["All"] + sorted(df["City"].unique())
+    # ensure City column is categorical
+    cities = ["All"] + sorted(df["City"].cat.categories.tolist())
     city_sel = st.sidebar.selectbox("City", cities)
 
     pollutants = [c for c in POLLUTANTS if c in df.columns]
-    pollutant = st.sidebar.selectbox("Pollutant", pollutants)
+    if not pollutants:
+        st.info("No pollutant columns found in dataset.")
+        return
+    pollutant = st.sidebar.selectbox("Pollutant", pollutants, index=max(0, pollutants.index("AQI")) if "AQI" in pollutants else 0)
 
-    df_f = df if city_sel=="All" else df[df["City"]==city_sel]
+    df_f = df if city_sel == "All" else df[df["City"] == city_sel]
 
-    # Trend plot
-    monthly = df_f.set_index("Date").groupby(pd.Grouper(freq="M"))[pollutant].mean()
+    if df_f.empty:
+        st.warning("No rows for the selected city.")
+        return
 
-    fig, ax = plt.subplots(figsize=(10,4))
-    ax.plot(monthly.index, monthly.values, marker="o")
-    st.pyplot(fig)
+    # Trend: monthly mean
+    try:
+        monthly = df_f.set_index("Date").groupby(pd.Grouper(freq="M"))[pollutant].mean().dropna()
+    except Exception:
+        monthly = df_f.groupby(["Year", "Month"])[pollutant].mean().reset_index()
+        monthly["Date"] = pd.to_datetime(monthly[["Year", "Month"]].assign(DAY=1))
+        monthly = monthly.set_index("Date")[pollutant].sort_index()
 
+    if monthly.empty:
+        st.info("Not enough data to plot monthly trend for the selected pollutant.")
+    else:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(monthly.index, monthly.values, marker="o")
+        ax.set_title(f"Monthly mean — {pollutant} ({city_sel})")
+        ax.set_ylabel(pollutant)
+        ax.grid(True)
+        st.pyplot(fig)
+        plt.close(fig)
+
+    # Show distribution
+    st.subheader(f"Distribution of {pollutant}")
+    vals = df_f[pollutant].dropna()
+    if vals.empty:
+        st.info("No values to show distribution.")
+    else:
+        fig2, ax2 = plt.subplots(figsize=(8, 4))
+        sns.histplot(vals, kde=True, ax=ax2)
+        st.pyplot(fig2)
+        plt.close(fig2)
 
 # -----------------------------
-# MAPS  (FIXED ERROR)
+# PAGE: MAPS
 # -----------------------------
 def page_maps(df):
     st.header("Geographical Maps")
+    if df is None or df.empty:
+        st.info("No data for maps.")
+        return
 
+    # Map requires Latitude/Longitude — pull from CITY_COORDS
     df = df.copy()
-    df["Latitude"] = df["City"].map(lambda c: CITY_COORDS.get(c,[None,None])[0])
-    df["Longitude"] = df["City"].map(lambda c: CITY_COORDS.get(c,[None,None])[1])
+    df["Latitude"] = df["City"].map(lambda c: CITY_COORDS.get(str(c), [np.nan, np.nan])[0])
+    df["Longitude"] = df["City"].map(lambda c: CITY_COORDS.get(str(c), [np.nan, np.nan])[1])
 
-    df_geo = df.dropna(subset=["Latitude","Longitude"])
+    df_geo = df.dropna(subset=["Latitude", "Longitude"]).copy()
+    if df_geo.empty:
+        st.info("No geolocated rows (cities not found in CITY_COORDS). Update CITY_COORDS or add lat/lon to dataset.")
+        return
 
-    # Force numeric to avoid category-type aggregation error
+    # ensure numeric
     df_geo["Latitude"] = pd.to_numeric(df_geo["Latitude"], errors="coerce")
     df_geo["Longitude"] = pd.to_numeric(df_geo["Longitude"], errors="coerce")
-    df_geo["AQI"] = pd.to_numeric(df_geo["AQI"], errors="coerce")
+    if "AQI" in df_geo.columns:
+        df_geo["AQI"] = pd.to_numeric(df_geo["AQI"], errors="coerce")
+    else:
+        df_geo["AQI"] = np.nan
 
-    # Correct aggregation
+    # Aggregate by city
     stats = df_geo.groupby("City").agg({
         "AQI": "mean",
         "Latitude": "first",
         "Longitude": "first"
     }).reset_index()
 
-    m = folium.Map(location=[22.97,78.65], zoom_start=5)
+    # Map
+    try:
+        m = folium.Map(location=[22.97, 78.65], zoom_start=5)
+        for _, r in stats.iterrows():
+            try:
+                aqi = r["AQI"]
+                lat = float(r["Latitude"])
+                lon = float(r["Longitude"])
+                if pd.isna(aqi):
+                    color = "blue"
+                    popup = f"{r['City']}"
+                    radius = 6
+                else:
+                    color = "green" if aqi <= 100 else "orange" if aqi <= 200 else "red"
+                    popup = f"{r['City']} — AQI {aqi:.1f}"
+                    radius = max(6, min(25, float(aqi) / 10))
 
-    for _, r in stats.iterrows():
-        aqi = r["AQI"]
-        lat, lon = r["Latitude"], r["Longitude"]
+                folium.CircleMarker(
+                    [lat, lon],
+                    radius=radius,
+                    color=color,
+                    fill=True,
+                    fill_opacity=0.7,
+                    popup=popup
+                ).add_to(m)
+            except Exception:
+                # skip invalid row
+                continue
 
-        color = "green" if aqi<=100 else "orange" if aqi<=200 else "red"
-
-        folium.CircleMarker(
-            [lat, lon],
-            radius=max(6, min(25, aqi/10)),
-            color=color,
-            fill=True,
-            fill_opacity=0.7,
-            popup=f"{r['City']} — AQI {aqi:.1f}"
-        ).add_to(m)
-
-    st_folium(m, width=900, height=500)
-
+        st_folium(m, width=900, height=500)
+    except Exception as e:
+        st.error(f"Failed to render folium map: {e}")
 
 # -----------------------------
-# MODEL (FIXED ERROR)
+# PAGE: MODEL
 # -----------------------------
 def page_model(df):
     st.header("AQI Prediction Model")
+    if df is None or df.empty:
+        st.info("No data to train a model.")
+        return
 
-    FEATURES = [c for c in POLLUTANTS if c!="AQI" and c in df.columns]
-    FEATURES += ["Year","Month","Day","Weekday","City_Code"]
+    if "AQI" not in df.columns:
+        st.info("AQI column not found — model requires target column named 'AQI'.")
+        return
 
-    X = df[FEATURES].fillna(df[FEATURES].median())
-    y = df["AQI"].fillna(df["AQI"].median())
+    FEATURES = [c for c in POLLUTANTS if c != "AQI" and c in df.columns]
+    # include basic date/city features
+    for f in ["Year", "Month", "Day", "Weekday", "City_Code"]:
+        if f in df.columns and f not in FEATURES:
+            FEATURES.append(f)
 
+    if not FEATURES:
+        st.info("No features found to train on. Add pollutant columns like PM2.5, PM10, etc.")
+        return
+
+    X = df[FEATURES].copy()
+    y = df["AQI"].copy()
+
+    # Fill missing features with median (per column)
+    X = X.fillna(X.median(axis=0))
+    y = y.fillna(y.median())
+
+    # Check for finite numeric arrays
+    X = X.apply(pd.to_numeric, errors="coerce")
+    if X.isna().any().any():
+        X = X.fillna(X.median(axis=0))
+
+    # Enough samples?
+    if len(X) < 50:
+        st.warning("Not enough rows to train a reliable model (need at least 50). Showing diagnostics only.")
+        st.write("Available rows:", len(X))
+        st.dataframe(df.head(20))
+        return
+
+    # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
 
-    # Use XGBoost if available
+    # Instantiate model
     if xgb_available:
         model = XGBRegressor(
             n_estimators=250,
@@ -232,39 +383,72 @@ def page_model(df):
             max_depth=6,
             subsample=0.8,
             colsample_bytree=0.8,
-            random_state=42
+            random_state=42,
+            verbosity=0
         )
+        model_name = "XGBoost"
     else:
         from sklearn.ensemble import RandomForestRegressor
         model = RandomForestRegressor(n_estimators=200, random_state=42)
+        model_name = "RandomForest"
 
-    model.fit(X_train, y_train)
-    preds = model.predict(X_test)
+    # Fit
+    try:
+        model.fit(X_train, y_train)
+    except Exception as e:
+        st.error(f"Model training failed: {e}")
+        return
 
-    # *** FIXED RMSE (no squared flag) ***
+    # Predict
+    try:
+        preds = model.predict(X_test)
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
+        return
+
+    # Metrics
     rmse = np.sqrt(mean_squared_error(y_test, preds))
     r2 = r2_score(y_test, preds)
 
-    st.metric("RMSE", f"{rmse:.2f}")
-    st.metric("R²", f"{r2:.3f}")
+    col1, col2 = st.columns(2)
+    col1.metric("Model", model_name)
+    col1.metric("RMSE", f"{rmse:.2f}")
+    col2.metric("R²", f"{r2:.3f}")
 
+    # Show sample predictions
+    sample = X_test.copy()
+    sample["Actual_AQI"] = y_test.values
+    sample["Predicted_AQI"] = np.round(preds, 2)
+    st.subheader("Sample predictions (test set)")
+    st.dataframe(sample.head(20))
 
 # -----------------------------
 # MAIN ROUTER
 # -----------------------------
 def main():
-    df_raw, files = load_dataset()
+    st.sidebar.title("Navigation")
+
+    data_folder = st.sidebar.text_input("Dataset folder", value="dataset")
+    if not data_folder:
+        data_folder = "dataset"
+
+    df_raw, files, errors = load_dataset(data_folder)
     df = preprocess(df_raw)
 
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home","Data Overview","EDA","Maps","Model","About"])
+    page = st.sidebar.radio("Go to", ["Home", "Data Overview", "EDA", "Maps", "Model", "About"])
 
-    if page=="Home": page_home(df, files)
-    elif page=="Data Overview": page_data_overview(df)
-    elif page=="EDA": page_eda(df)
-    elif page=="Maps": page_maps(df)
-    elif page=="Model": page_model(df)
-    elif page=="About": page_about()
+    if page == "Home":
+        page_home(df, files, errors)
+    elif page == "Data Overview":
+        page_data_overview(df)
+    elif page == "EDA":
+        page_eda(df)
+    elif page == "Maps":
+        page_maps(df)
+    elif page == "Model":
+        page_model(df)
+    elif page == "About":
+        page_about()
 
 if __name__ == "__main__":
     main()
