@@ -667,6 +667,7 @@ def main():
     elif page == "EDA": page_eda(df)
     elif page == "Maps": page_maps(df)
     elif page == "Model": page_model(df)
+    elif page == "About":page_about()
 
 if __name__ == "__main__":
     main()
