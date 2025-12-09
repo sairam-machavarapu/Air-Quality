@@ -524,24 +524,25 @@ def page_model(df):
         st.error("Dataset does not contain AQI column!")
         return
 
-    # ------------------------------
-    # Sidebar Model Options
-    # ------------------------------
     st.sidebar.subheader("Model Options")
 
     model_choice = st.sidebar.selectbox(
-        "Select Model",
-        ["Random Forest", "Extra Trees", "Decision Tree", "Linear Regression"]
+        "Select Model (Fast Mode Available)",
+        [
+            "Random Forest (Fast)",
+            "Extra Trees (Fast)",
+            "Decision Tree",
+            "Linear Regression",
+            "Ridge Regression (Fast)",
+            "Lasso Regression (Fast)",
+            "SGD Regressor (Ultra Fast)",
+            "KNN Regressor (Fast)"
+        ]
     )
 
-    test_size_percent = st.sidebar.slider(
-        "Test Size (%)", 10, 40, 20, step=5
-    )
+    test_size_percent = st.sidebar.slider("Test Size (%)", 10, 40, 20, step=5)
     test_size = test_size_percent / 100
 
-    # ------------------------------
-    # Feature Selection
-    # ------------------------------
     FEATURES = [c for c in POLLUTANTS if c in df.columns and c != "AQI"]
     FEATURES += ["Year", "Month", "Day", "Weekday", "City_Code"]
 
@@ -552,16 +553,16 @@ def page_model(df):
         X, y, test_size=test_size, random_state=42
     )
 
-    # ------------------------------
-    # Model Selection
-    # ------------------------------
-    if model_choice == "Random Forest":
+    # ----------------------------------------------------
+    # Model Selection (FAST MODE ENABLED)
+    # ----------------------------------------------------
+    if model_choice == "Random Forest (Fast)":
         from sklearn.ensemble import RandomForestRegressor
-        model = RandomForestRegressor(n_estimators=200, random_state=42)
+        model = RandomForestRegressor(n_estimators=50, random_state=42)
 
-    elif model_choice == "Extra Trees":
+    elif model_choice == "Extra Trees (Fast)":
         from sklearn.ensemble import ExtraTreesRegressor
-        model = ExtraTreesRegressor(n_estimators=200, random_state=42)
+        model = ExtraTreesRegressor(n_estimators=50, random_state=42)
 
     elif model_choice == "Decision Tree":
         from sklearn.tree import DecisionTreeRegressor
@@ -571,103 +572,50 @@ def page_model(df):
         from sklearn.linear_model import LinearRegression
         model = LinearRegression()
 
-    with st.spinner("Training model..."):
-        model.fit(X_train, y_train)
+    elif model_choice == "Ridge Regression (Fast)":
+        from sklearn.linear_model import Ridge
+        model = Ridge(alpha=1.0)
 
+    elif model_choice == "Lasso Regression (Fast)":
+        from sklearn.linear_model import Lasso
+        model = Lasso(alpha=0.001, max_iter=5000)
+
+    elif model_choice == "SGD Regressor (Ultra Fast)":
+        from sklearn.linear_model import SGDRegressor
+        model = SGDRegressor(max_iter=1000, tol=1e-3)
+
+    elif model_choice == "KNN Regressor (Fast)":
+        from sklearn.neighbors import KNeighborsRegressor
+        model = KNeighborsRegressor(n_neighbors=5)
+
+    # ----------------------------------------------------
+    # Cache Training
+    # ----------------------------------------------------
+    @st.cache_resource
+    def train_model_cached(model, X_train, y_train):
+        model.fit(X_train, y_train)
+        return model
+
+    with st.spinner("Training model..."):
+        model = train_model_cached(model, X_train, y_train)
+
+    # Predict
     preds = model.predict(X_test)
 
-    # ------------------------------
-    # Metrics
-    # ------------------------------
     rmse = np.sqrt(mean_squared_error(y_test, preds))
-    mae = np.mean(np.abs(y_test - preds))
     r2 = r2_score(y_test, preds)
-    mape = np.mean(np.abs((y_test - preds) / y_test)) * 100
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("RMSE", f"{rmse:.2f}")
-    col2.metric("MAE", f"{mae:.2f}")
-    col3.metric("R² Score", f"{r2:.3f}")
+    st.subheader("📌 Model Performance")
+    st.metric("RMSE", f"{rmse:.2f}")
+    st.metric("R² Score", f"{r2:.3f}")
 
-    st.metric("MAPE (%)", f"{mape:.2f}")
-
-    # ------------------------------
-    # Feature Importance
-    # ------------------------------
-    if model_choice in ["Random Forest", "Extra Trees", "Decision Tree"]:
+    # Avoid feature importance for non-tree models
+    if hasattr(model, "feature_importances_"):
         st.subheader("Feature Importance")
-
         importance = pd.Series(model.feature_importances_, index=FEATURES).sort_values(ascending=False)
-
-        fig_imp, ax_imp = plt.subplots(figsize=(8, 5))
-        importance.plot(kind="barh", ax=ax_imp)
-        ax_imp.set_title("Feature Importance")
-        st.pyplot(fig_imp)
-
-    # ------------------------------
-    # Scatter Plot
-    # ------------------------------
-    st.subheader("Predicted vs Actual")
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.scatter(y_test, preds, alpha=0.5)
-    ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
-    ax.set_xlabel("Actual AQI")
-    ax.set_ylabel("Predicted AQI")
-    st.pyplot(fig)
-
-    # ------------------------------
-    # User Prediction Form
-    # ------------------------------
-    st.subheader("🔮 Predict AQI from User Input")
-
-    with st.form("prediction_form"):
-        col1, col2 = st.columns(2)
-
-        city_input = col1.selectbox("City", sorted(df["City"].unique()))
-        date_input = col2.date_input("Date")
-
-        pollutant_inputs = {}
-        for pollutant in POLLUTANTS:
-            if pollutant != "AQI" and pollutant in df.columns:
-                pollutant_inputs[pollutant] = st.number_input(
-                    f"{pollutant} value",
-                    min_value=0.0, max_value=2000.0,
-                    value=float(df[pollutant].median())
-                )
-
-        submitted = st.form_submit_button("Predict AQI")
-
-    if submitted:
-        # ----------------------
-        # Prepare input features
-        # ----------------------
-        input_data = {}
-
-        for key, val in pollutant_inputs.items():
-            input_data[key] = val
-
-        # Add date features
-        date = pd.to_datetime(date_input)
-        input_data["Year"] = date.year
-        input_data["Month"] = date.month
-        input_data["Day"] = date.day
-        input_data["Weekday"] = date.weekday()
-
-        # Add city code
-        city_categories = df["City"].astype("category")
-        city_codes = dict(enumerate(city_categories.cat.categories))
-        city_code_reverse = {v: k for k, v in city_codes.items()}
-        input_data["City_Code"] = city_code_reverse[city_input]
-
-        # Convert to df
-        input_df = pd.DataFrame([input_data])[FEATURES]
-
-        # ----------------------
-        # Predict AQI
-        # ----------------------
-        predicted_aqi = model.predict(input_df)[0]
-
-        st.success(f"🌟 Predicted AQI: **{predicted_aqi:.2f}**")
+        fig, ax = plt.subplots(figsize=(8, 5))
+        importance.plot(kind="barh", ax=ax)
+        st.pyplot(fig)
 
 #  About Page
 
