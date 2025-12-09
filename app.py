@@ -420,16 +420,6 @@ def page_maps(df):
 # -----------------------------
 # MODEL — FAST + CACHED
 # -----------------------------
-@st.cache_resource
-def train_model_cached(X_train, y_train):
-    model = RandomForestRegressor(
-        n_estimators=200,
-        random_state=42,
-        n_jobs=-1
-    )
-    model.fit(X_train, y_train)
-    return model
-
 def page_model(df):
     st.header("AQI Prediction Model")
 
@@ -437,6 +427,24 @@ def page_model(df):
         st.error("Dataset does not contain AQI column!")
         return
 
+    # ------------------------------
+    # Sidebar Model Options
+    # ------------------------------
+    st.sidebar.subheader("Model Options")
+
+    model_choice = st.sidebar.selectbox(
+        "Select Model",
+        ["Random Forest", "Extra Trees", "Decision Tree", "Linear Regression"]
+    )
+
+    test_size_percent = st.sidebar.slider(
+        "Test Size (%)", 10, 40, 20, step=5
+    )
+    test_size = test_size_percent / 100
+
+    # ------------------------------
+    # Feature Selection
+    # ------------------------------
     FEATURES = [c for c in POLLUTANTS if c in df.columns and c != "AQI"]
     FEATURES += ["Year", "Month", "Day", "Weekday", "City_Code"]
 
@@ -444,17 +452,88 @@ def page_model(df):
     y = df["AQI"].fillna(df["AQI"].median())
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+        X, y, test_size=test_size, random_state=42
     )
 
-    model = train_model_cached(X_train, y_train)
+    # ------------------------------
+    # Model Selection
+    # ------------------------------
+    if model_choice == "Random Forest":
+        from sklearn.ensemble import RandomForestRegressor
+        model = RandomForestRegressor(n_estimators=200, random_state=42)
+
+    elif model_choice == "Extra Trees":
+        from sklearn.ensemble import ExtraTreesRegressor
+        model = ExtraTreesRegressor(n_estimators=200, random_state=42)
+
+    elif model_choice == "Decision Tree":
+        from sklearn.tree import DecisionTreeRegressor
+        model = DecisionTreeRegressor(random_state=42)
+
+    elif model_choice == "Linear Regression":
+        from sklearn.linear_model import LinearRegression
+        model = LinearRegression()
+
+    # Train Model
+    with st.spinner("Training model..."):
+        model.fit(X_train, y_train)
+
+    # Predict
     preds = model.predict(X_test)
 
+    # ------------------------------
+    # Metrics
+    # ------------------------------
     rmse = np.sqrt(mean_squared_error(y_test, preds))
+    mae = np.mean(np.abs(y_test - preds))
     r2 = r2_score(y_test, preds)
+    mape = np.mean(np.abs((y_test - preds) / y_test)) * 100
 
-    st.metric("RMSE", f"{rmse:.2f}")
-    st.metric("R² Score", f"{r2:.3f}")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("RMSE", f"{rmse:.2f}")
+    col2.metric("MAE", f"{mae:.2f}")
+    col3.metric("R² Score", f"{r2:.3f}")
+
+    st.metric("MAPE (%)", f"{mape:.2f}")
+
+    st.subheader("Predicted vs Actual Values")
+
+    # ------------------------------
+    # Scatter Plot
+    # ------------------------------
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.scatter(y_test, preds, alpha=0.5)
+    ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+    ax.set_xlabel("Actual AQI")
+    ax.set_ylabel("Predicted AQI")
+    ax.set_title("Predicted vs Actual")
+    st.pyplot(fig)
+
+    # ------------------------------
+    # Feature Importance
+    # ------------------------------
+    if model_choice in ["Random Forest", "Extra Trees", "Decision Tree"]:
+        st.subheader("Feature Importance")
+
+        importance = pd.Series(model.feature_importances_, index=FEATURES).sort_values(ascending=False)
+
+        fig2, ax2 = plt.subplots(figsize=(8, 5))
+        importance.plot(kind="barh", ax=ax2)
+        ax2.set_title("Feature Importance")
+        st.pyplot(fig2)
+
+    # ------------------------------
+    # Show Prediction Table
+    # ------------------------------
+    st.subheader("Sample Predictions")
+
+    sample = pd.DataFrame({
+        "Actual AQI": y_test.values[:20],
+        "Predicted AQI": preds[:20]
+    })
+
+    st.dataframe(sample)
+
 
 # -----------------------------
 # MAIN ROUTER
