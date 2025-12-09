@@ -160,19 +160,143 @@ def page_data_overview(df):
 def page_eda(df):
     st.header("Exploratory Data Analysis")
 
+    if df.empty:
+        st.warning("No data available.")
+        return
+
+    # Sidebar Controls
+    st.sidebar.subheader("Filters")
+
     cities = ["All"] + sorted(df["City"].unique())
     city_sel = st.sidebar.selectbox("City", cities)
+
     pollutants = [c for c in POLLUTANTS if c in df.columns]
     pollutant = st.sidebar.selectbox("Pollutant", pollutants)
 
+    eda_option = st.sidebar.selectbox(
+        "Select EDA Visualisation",
+        [
+            "Monthly Trend",
+            "Yearly Trend",
+            "Seasonal Pattern (Month-wise)",
+            "Weekday Pattern",
+            "Distribution (Histogram + KDE)",
+            "Boxplot",
+            "Correlation Heatmap",
+            "City-wise Comparison"
+        ]
+    )
+
     df_f = df if city_sel == "All" else df[df["City"] == city_sel]
 
-    monthly = df_f.set_index("Date").groupby(pd.Grouper(freq="M"))[pollutant].mean()
+    if df_f.empty:
+        st.warning("No data for the selected filters.")
+        return
 
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(monthly.index, monthly.values, marker="o")
-    ax.set_title(f"Monthly Trend: {pollutant}")
-    st.pyplot(fig)
+    # -------------------------
+    # 1. Monthly Trend
+    # -------------------------
+    if eda_option == "Monthly Trend":
+        st.subheader(f"Monthly Trend: {pollutant}")
+
+        monthly = df_f.set_index("Date").groupby(pd.Grouper(freq="M"))[pollutant].mean()
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(monthly.index, monthly.values, marker="o")
+        ax.set_ylabel(pollutant)
+        ax.grid(True)
+        st.pyplot(fig)
+
+    # -------------------------
+    # 2. Yearly Trend
+    # -------------------------
+    elif eda_option == "Yearly Trend":
+        st.subheader(f"Yearly Trend: {pollutant}")
+
+        yearly = df_f.groupby("Year")[pollutant].mean()
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.bar(yearly.index, yearly.values)
+        ax.set_xlabel("Year")
+        st.pyplot(fig)
+
+    # -------------------------
+    # 3. Seasonal Pattern
+    # -------------------------
+    elif eda_option == "Seasonal Pattern (Month-wise)":
+        st.subheader(f"Seasonal Pattern (Month-wise): {pollutant}")
+
+        monthwise = df_f.groupby("Month")[pollutant].mean()
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.plot(monthwise.index, monthwise.values, marker="o")
+        ax.set_xticks(range(1, 13))
+        st.pyplot(fig)
+
+    # -------------------------
+    # 4. Weekday Pattern
+    # -------------------------
+    elif eda_option == "Weekday Pattern":
+        st.subheader(f"Weekday Pattern: {pollutant}")
+
+        weekday = df_f.groupby("Weekday")[pollutant].mean()
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.bar(
+            ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+            weekday.values
+        )
+        st.pyplot(fig)
+
+    # -------------------------
+    # 5. Distribution
+    # -------------------------
+    elif eda_option == "Distribution (Histogram + KDE)":
+        st.subheader(f"Distribution of {pollutant}")
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        sns.histplot(df_f[pollutant], kde=True, ax=ax)
+        st.pyplot(fig)
+
+    # -------------------------
+    # 6. Boxplot
+    # -------------------------
+    elif eda_option == "Boxplot":
+        st.subheader(f"Boxplot of {pollutant}")
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        sns.boxplot(x=df_f[pollutant], ax=ax)
+        st.pyplot(fig)
+
+    # -------------------------
+    # 7. Correlation Heatmap
+    # -------------------------
+    elif eda_option == "Correlation Heatmap":
+        st.subheader("Correlation Heatmap")
+
+        num_df = df_f.select_dtypes(include=["float", "int"])
+        corr = num_df.corr()
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.heatmap(corr, cmap="coolwarm", ax=ax)
+        st.pyplot(fig)
+
+    # -------------------------
+    # 8. City-wise Comparison
+    # -------------------------
+    elif eda_option == "City-wise Comparison":
+        if city_sel != "All":
+            st.info("City-wise comparison is available only when 'City = All'")
+            return
+
+        st.subheader(f"City-wise Average {pollutant}")
+
+        city_avg = df.groupby("City")[pollutant].mean().sort_values()
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.barh(city_avg.index, city_avg.values)
+        st.pyplot(fig)
+
 
 # -----------------------------
 # MAPS
