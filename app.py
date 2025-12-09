@@ -302,31 +302,98 @@ def page_eda(df):
 # MAPS
 # -----------------------------
 def page_maps(df):
-    st.header("AQI Map View")
+    st.header("Geographical Maps")
 
+    if df.empty:
+        st.warning("No data available for maps.")
+        return
+
+    # Sidebar Options
+    st.sidebar.subheader("Map Options")
+
+    map_type = st.sidebar.selectbox(
+        "Select Map Visualization",
+        ["AQI Markers", "AQI Heatmap", "City Marker Clusters"]
+    )
+
+    map_theme = st.sidebar.selectbox(
+        "Base Map Theme",
+        ["OpenStreetMap", "CartoDB Dark Matter", "Stamen Terrain", "Stamen Toner"]
+    )
+
+    pollutant_choice = st.sidebar.selectbox(
+        "Pollutant for Heatmap",
+        [c for c in POLLUTANTS if c in df.columns],
+        index=0
+    )
+
+    # Prepare data
     df = df.copy()
     df["Latitude"] = df["City"].map(lambda c: CITY_COORDS.get(c, [None, None])[0])
     df["Longitude"] = df["City"].map(lambda c: CITY_COORDS.get(c, [None, None])[1])
     df_geo = df.dropna(subset=["Latitude", "Longitude"])
 
-    stats = df_geo.groupby("City").agg({
-        "AQI": "mean",
-        "Latitude": "first",
-        "Longitude": "first"
-    }).reset_index()
+    if df_geo.empty:
+        st.error("No geolocation data available.")
+        return
 
-    m = folium.Map(location=[22.97, 78.65], zoom_start=5)
-    for _, r in stats.iterrows():
-        folium.CircleMarker(
-            [r["Latitude"], r["Longitude"]],
-            radius=max(6, min(25, r["AQI"] / 10)),
-            color="red" if r["AQI"] > 150 else "green",
-            fill=True,
-            fill_opacity=0.7,
-            popup=f"{r['City']} — AQI {r['AQI']:.2f}"
-        ).add_to(m)
+    # Create map
+    m = folium.Map(
+        location=[22.97, 78.65],
+        zoom_start=5,
+        tiles=map_theme
+    )
 
-    st_folium(m, width=900, height=500)
+    # ------------------------------------------------
+    # 1. AQI Circle Markers
+    # ------------------------------------------------
+    if map_type == "Geographical Markers":
+        stats = df_geo.groupby("City").agg({
+            "AQI": "mean",
+            "Latitude": "first",
+            "Longitude": "first"
+        }).reset_index()
+
+        for _, r in stats.iterrows():
+            aqi = r["AQI"]
+            color = "green" if aqi <= 100 else "orange" if aqi <= 200 else "red"
+
+            folium.CircleMarker(
+                [r["Latitude"], r["Longitude"]],
+                radius=max(6, min(25, aqi / 10)),
+                color=color,
+                fill=True,
+                fill_opacity=0.7,
+                popup=f"{r['City']} — AQI {aqi:.1f}"
+            ).add_to(m)
+
+    # ------------------------------------------------
+    # 2. AQI Heatmap
+    # ------------------------------------------------
+    elif map_type == "Geographical Heatmap":
+        heat_df = df_geo.dropna(subset=[pollutant_choice])
+        heat_data = heat_df[["Latitude", "Longitude", pollutant_choice]].values.tolist()
+
+        from folium.plugins import HeatMap
+        HeatMap(heat_data, radius=25, blur=15).add_to(m)
+
+    # ------------------------------------------------
+    # 3. City Marker Clusters
+    # ------------------------------------------------
+    elif map_type == "City Marker Clusters":
+        from folium.plugins import MarkerCluster
+
+        cluster = MarkerCluster().add_to(m)
+
+        for _, r in df_geo.iterrows():
+            folium.Marker(
+                [r["Latitude"], r["Longitude"]],
+                popup=f"{r['City']}<br>AQI: {r['AQI']}"
+            ).add_to(cluster)
+
+    # Display map
+    st_folium(m, width=900, height=550)
+
 
 # -----------------------------
 # MODEL — FAST + CACHED
