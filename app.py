@@ -474,11 +474,9 @@ def page_model(df):
         from sklearn.linear_model import LinearRegression
         model = LinearRegression()
 
-    # Train Model
     with st.spinner("Training model..."):
         model.fit(X_train, y_train)
 
-    # Predict
     preds = model.predict(X_test)
 
     # ------------------------------
@@ -496,19 +494,6 @@ def page_model(df):
 
     st.metric("MAPE (%)", f"{mape:.2f}")
 
-    st.subheader("Predicted vs Actual Values")
-
-    # ------------------------------
-    # Scatter Plot
-    # ------------------------------
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.scatter(y_test, preds, alpha=0.5)
-    ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
-    ax.set_xlabel("Actual AQI")
-    ax.set_ylabel("Predicted AQI")
-    ax.set_title("Predicted vs Actual")
-    st.pyplot(fig)
-
     # ------------------------------
     # Feature Importance
     # ------------------------------
@@ -517,22 +502,75 @@ def page_model(df):
 
         importance = pd.Series(model.feature_importances_, index=FEATURES).sort_values(ascending=False)
 
-        fig2, ax2 = plt.subplots(figsize=(8, 5))
-        importance.plot(kind="barh", ax=ax2)
-        ax2.set_title("Feature Importance")
-        st.pyplot(fig2)
+        fig_imp, ax_imp = plt.subplots(figsize=(8, 5))
+        importance.plot(kind="barh", ax=ax_imp)
+        ax_imp.set_title("Feature Importance")
+        st.pyplot(fig_imp)
 
     # ------------------------------
-    # Show Prediction Table
+    # Scatter Plot
     # ------------------------------
-    st.subheader("Sample Predictions")
+    st.subheader("Predicted vs Actual")
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.scatter(y_test, preds, alpha=0.5)
+    ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+    ax.set_xlabel("Actual AQI")
+    ax.set_ylabel("Predicted AQI")
+    st.pyplot(fig)
 
-    sample = pd.DataFrame({
-        "Actual AQI": y_test.values[:20],
-        "Predicted AQI": preds[:20]
-    })
+    # ------------------------------
+    # User Prediction Form
+    # ------------------------------
+    st.subheader("🔮 Predict AQI from User Input")
 
-    st.dataframe(sample)
+    with st.form("prediction_form"):
+        col1, col2 = st.columns(2)
+
+        city_input = col1.selectbox("City", sorted(df["City"].unique()))
+        date_input = col2.date_input("Date")
+
+        pollutant_inputs = {}
+        for pollutant in POLLUTANTS:
+            if pollutant != "AQI" and pollutant in df.columns:
+                pollutant_inputs[pollutant] = st.number_input(
+                    f"{pollutant} value",
+                    min_value=0.0, max_value=2000.0,
+                    value=float(df[pollutant].median())
+                )
+
+        submitted = st.form_submit_button("Predict AQI")
+
+    if submitted:
+        # ----------------------
+        # Prepare input features
+        # ----------------------
+        input_data = {}
+
+        for key, val in pollutant_inputs.items():
+            input_data[key] = val
+
+        # Add date features
+        date = pd.to_datetime(date_input)
+        input_data["Year"] = date.year
+        input_data["Month"] = date.month
+        input_data["Day"] = date.day
+        input_data["Weekday"] = date.weekday()
+
+        # Add city code
+        city_categories = df["City"].astype("category")
+        city_codes = dict(enumerate(city_categories.cat.categories))
+        city_code_reverse = {v: k for k, v in city_codes.items()}
+        input_data["City_Code"] = city_code_reverse[city_input]
+
+        # Convert to df
+        input_df = pd.DataFrame([input_data])[FEATURES]
+
+        # ----------------------
+        # Predict AQI
+        # ----------------------
+        predicted_aqi = model.predict(input_df)[0]
+
+        st.success(f"🌟 Predicted AQI: **{predicted_aqi:.2f}**")
 
 
 # -----------------------------
