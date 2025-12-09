@@ -524,10 +524,13 @@ def page_model(df):
         st.error("Dataset does not contain AQI column!")
         return
 
+    # ================================
+    # Sidebar Options
+    # ================================
     st.sidebar.subheader("Model Options")
 
     model_choice = st.sidebar.selectbox(
-        "Select Model (Fast Mode Available)",
+        "Select Model",
         [
             "Random Forest (Fast)",
             "Extra Trees (Fast)",
@@ -543,6 +546,9 @@ def page_model(df):
     test_size_percent = st.sidebar.slider("Test Size (%)", 10, 40, 20, step=5)
     test_size = test_size_percent / 100
 
+    # ================================
+    # Feature Selection
+    # ================================
     FEATURES = [c for c in POLLUTANTS if c in df.columns and c != "AQI"]
     FEATURES += ["Year", "Month", "Day", "Weekday", "City_Code"]
 
@@ -553,9 +559,9 @@ def page_model(df):
         X, y, test_size=test_size, random_state=42
     )
 
-    # ----------------------------------------------------
-    # Model Selection (FAST MODE ENABLED)
-    # ----------------------------------------------------
+    # ================================
+    # Model Selection
+    # ================================
     if model_choice == "Random Forest (Fast)":
         from sklearn.ensemble import RandomForestRegressor
         model = RandomForestRegressor(n_estimators=50, random_state=42)
@@ -588,34 +594,110 @@ def page_model(df):
         from sklearn.neighbors import KNeighborsRegressor
         model = KNeighborsRegressor(n_neighbors=5)
 
-    # ----------------------------------------------------
-    # Cache Training
-    # ----------------------------------------------------
+    # ================================
+    # Cached Training Function
+    # ================================
     @st.cache_resource
-    def train_model_cached(model, X_train, y_train):
-        model.fit(X_train, y_train)
-        return model
+    def train_model_cached(_model, X_train, y_train):
+        _model.fit(X_train, y_train)
+        return _model
 
     with st.spinner("Training model..."):
         model = train_model_cached(model, X_train, y_train)
 
-    # Predict
+    # ================================
+    # Predictions
+    # ================================
     preds = model.predict(X_test)
 
     rmse = np.sqrt(mean_squared_error(y_test, preds))
+    mae = np.mean(np.abs(y_test - preds))
     r2 = r2_score(y_test, preds)
+    mape = np.mean(np.abs((y_test - preds) / y_test)) * 100
 
+    # ================================
+    # Metrics
+    # ================================
     st.subheader("📌 Model Performance")
-    st.metric("RMSE", f"{rmse:.2f}")
-    st.metric("R² Score", f"{r2:.3f}")
 
-    # Avoid feature importance for non-tree models
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("RMSE", f"{rmse:.2f}")
+    c2.metric("MAE", f"{mae:.2f}")
+    c3.metric("R² Score", f"{r2:.3f}")
+    c4.metric("MAPE (%)", f"{mape:.2f}")
+
+    # ================================
+    # Feature Importance (Tree Models Only)
+    # ================================
     if hasattr(model, "feature_importances_"):
-        st.subheader("Feature Importance")
+        st.subheader("📊 Feature Importance")
+
         importance = pd.Series(model.feature_importances_, index=FEATURES).sort_values(ascending=False)
-        fig, ax = plt.subplots(figsize=(8, 5))
-        importance.plot(kind="barh", ax=ax)
-        st.pyplot(fig)
+
+        fig_imp, ax_imp = plt.subplots(figsize=(8, 5))
+        importance.plot(kind="barh", ax=ax_imp)
+        ax_imp.set_title("Feature Importance")
+        st.pyplot(fig_imp)
+
+    # ================================
+    # Predicted vs Actual Scatter
+    # ================================
+    st.subheader("📉 Predicted vs Actual")
+
+    fig_scatter, ax_scatter = plt.subplots(figsize=(7, 5))
+    ax_scatter.scatter(y_test, preds, alpha=0.5)
+    ax_scatter.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+    ax_scatter.set_xlabel("Actual AQI")
+    ax_scatter.set_ylabel("Predicted AQI")
+    st.pyplot(fig_scatter)
+
+    # ================================
+    # User Prediction Form
+    # ================================
+    st.subheader("🔮 Predict AQI from User Inputs")
+
+    with st.form("prediction_form"):
+        col1, col2 = st.columns(2)
+
+        city_input = col1.selectbox("Select City", sorted(df["City"].unique()))
+        date_input = col2.date_input("Select Date")
+
+        pollutant_inputs = {}
+        for pollutant in POLLUTANTS:
+            if pollutant != "AQI" and pollutant in df.columns:
+                pollutant_inputs[pollutant] = st.number_input(
+                    f"{pollutant} value",
+                    min_value=0.0,
+                    max_value=2000.0,
+                    value=float(df[pollutant].median())
+                )
+
+        submitted = st.form_submit_button("Predict AQI")
+
+    if submitted:
+        # Prepare input
+        input_data = pollutant_inputs.copy()
+
+        # Date features
+        date = pd.to_datetime(date_input)
+        input_data["Year"] = date.year
+        input_data["Month"] = date.month
+        input_data["Day"] = date.day
+        input_data["Weekday"] = date.weekday()
+
+        # City Code
+        city_cats = df["City"].astype("category")
+        city_mapping = {cat: code for code, cat in enumerate(city_cats.cat.categories)}
+        input_data["City_Code"] = city_mapping[city_input]
+
+        # Convert to DataFrame
+        input_df = pd.DataFrame([input_data])[FEATURES]
+
+        # Predict
+        predicted_aqi = model.predict(input_df)[0]
+
+        st.success(f"🌟 Predicted AQI: **{predicted_aqi:.2f}**")
+
 
 #  About Page
 
