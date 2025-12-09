@@ -112,7 +112,39 @@ def preprocess(df):
 # -----------------------------
 def page_home(df, files):
     st.title("India Air Quality Explorer")
+
     st.success(f"Loaded {len(files)} file(s). Total rows: {len(df):,}")
+
+    st.markdown("""
+    ### 📘 About This Dataset
+
+    This dataset contains **India's air quality measurements** collected from multiple
+    Continuous Ambient Air Quality Monitoring Stations (CAAQMS).  
+    Each file represents pollutant readings recorded at different time intervals across major Indian cities.
+
+    #### **Dataset Includes:**
+    - 🌆 **Cities:** 26 major urban locations across India  
+    - 📅 **Time Span:** Multiple years of historical air quality data  
+    - 🧪 **Pollutants Tracked:**  
+      - PM2.5, PM10  
+      - NO, NO2, NOx  
+      - CO, SO2, NH3  
+      - O3, Benzene, Toluene, Xylene  
+      - **AQI (Air Quality Index)**  
+    - 🗂 **Total Rows:** Provides a large enough sample for visualisation and machine learning prediction  
+
+    #### **Purpose of This App**
+    This tool helps you:
+    - Visualize trends in air pollution  
+    - Compare cities on pollution levels  
+    - Explore spatial pollution patterns on maps  
+    - Predict **AQI** using machine learning models  
+
+    ---
+    """)
+
+    st.markdown("#### 🔍 *Navigate using the sidebar to explore different sections of the app.*")
+
 
 # -----------------------------
 # DATA OVERVIEW
