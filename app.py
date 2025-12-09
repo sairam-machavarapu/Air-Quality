@@ -297,10 +297,8 @@ def page_eda(df):
         ax.barh(city_avg.index, city_avg.values)
         st.pyplot(fig)
 
+#   maps
 
-# -----------------------------
-# MAPS
-# -----------------------------
 def page_maps(df):
     st.header("Geographical Maps")
 
@@ -323,31 +321,35 @@ def page_maps(df):
 
     pollutant_choice = st.sidebar.selectbox(
         "Pollutant for Heatmap",
-        [c for c in POLLUTANTS if c in df.columns],
-        index=0
+        [c for c in POLLUTANTS if c in df.columns]
     )
 
-    # Prepare data
+    # Prepare dataset with coordinates
     df = df.copy()
-    df["Latitude"] = df["City"].map(lambda c: CITY_COORDS.get(c, [None, None])[0])
-    df["Longitude"] = df["City"].map(lambda c: CITY_COORDS.get(c, [None, None])[1])
+    df["Latitude"] = df["City"].map(lambda c: CITY_COORDS.get(str(c), [None, None])[0])
+    df["Longitude"] = df["City"].map(lambda c: CITY_COORDS.get(str(c), [None, None])[1])
+
     df_geo = df.dropna(subset=["Latitude", "Longitude"])
 
     if df_geo.empty:
-        st.error("No geolocation data available.")
+        st.error("No geolocation data available for these cities.")
         return
 
-    # Create map
+    # Convert pollutant to numeric
+    if pollutant_choice in df_geo.columns:
+        df_geo[pollutant_choice] = pd.to_numeric(df_geo[pollutant_choice], errors="coerce")
+
+    # Base Map
     m = folium.Map(
         location=[22.97, 78.65],
         zoom_start=5,
         tiles=map_theme
     )
 
-    # ------------------------------------------------
+    # -----------------------------------------------------
     # 1. AQI Circle Markers
-    # ------------------------------------------------
-    if map_type == "Geographical Markers":
+    # -----------------------------------------------------
+    if map_type == "AQI Markers":
         stats = df_geo.groupby("City").agg({
             "AQI": "mean",
             "Latitude": "first",
@@ -355,6 +357,9 @@ def page_maps(df):
         }).reset_index()
 
         for _, r in stats.iterrows():
+            if pd.isna(r["AQI"]):
+                continue
+
             aqi = r["AQI"]
             color = "green" if aqi <= 100 else "orange" if aqi <= 200 else "red"
 
@@ -367,31 +372,48 @@ def page_maps(df):
                 popup=f"{r['City']} — AQI {aqi:.1f}"
             ).add_to(m)
 
-    # ------------------------------------------------
+    # -----------------------------------------------------
     # 2. AQI Heatmap
-    # ------------------------------------------------
-    elif map_type == "Geographical Heatmap":
+    # -----------------------------------------------------
+    elif map_type == "AQI Heatmap":
+        from folium.plugins import HeatMap
+
         heat_df = df_geo.dropna(subset=[pollutant_choice])
+        heat_df = heat_df[heat_df[pollutant_choice] > 0]  # heatmap cannot use zero/negative
+
+        if heat_df.empty:
+            st.error("No valid data available for this pollutant heatmap.")
+            return
+
         heat_data = heat_df[["Latitude", "Longitude", pollutant_choice]].values.tolist()
 
-        from folium.plugins import HeatMap
-        HeatMap(heat_data, radius=25, blur=15).add_to(m)
+        HeatMap(
+            heat_data,
+            radius=25,
+            blur=15,
+            min_opacity=0.5
+        ).add_to(m)
 
-    # ------------------------------------------------
+    # -----------------------------------------------------
     # 3. City Marker Clusters
-    # ------------------------------------------------
+    # -----------------------------------------------------
     elif map_type == "City Marker Clusters":
         from folium.plugins import MarkerCluster
 
         cluster = MarkerCluster().add_to(m)
 
         for _, r in df_geo.iterrows():
+            if pd.isna(r["AQI"]):
+                continue
+
             folium.Marker(
                 [r["Latitude"], r["Longitude"]],
                 popup=f"{r['City']}<br>AQI: {r['AQI']}"
             ).add_to(cluster)
 
-    # Display map
+    # -----------------------------------------------------
+    # Display Map
+    # -----------------------------------------------------
     st_folium(m, width=900, height=550)
 
 
