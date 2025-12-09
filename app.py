@@ -150,9 +150,106 @@ def page_home(df, files):
 # DATA OVERVIEW
 # -----------------------------
 def page_data_overview(df):
-    st.header("Data Overview")
-    st.dataframe(df.head(100))
-    st.write(df.describe().T)
+    st.header("📊 Data Overview")
+
+    if df.empty:
+        st.warning("Dataset is empty!")
+        return
+
+    # ================================
+    # Sidebar Filters
+    # ================================
+    st.sidebar.subheader("Filters")
+
+    # City filter
+    cities = ["All"] + sorted(df["City"].unique())
+    city_sel = st.sidebar.selectbox("Select City", cities)
+
+    # Date filter
+    min_date = df["Date"].min()
+    max_date = df["Date"].max()
+
+    date_range = st.sidebar.date_input(
+        "Select Date Range",
+        value=[min_date, max_date],
+        min_value=min_date,
+        max_value=max_date
+    )
+
+    # Pollutant highlight
+    highlight_col = st.sidebar.selectbox(
+        "Highlight Pollutant Column",
+        ["None"] + [c for c in POLLUTANTS if c in df.columns]
+    )
+
+    # ================================
+    # Apply Filters
+    # ================================
+    df_filtered = df.copy()
+
+    if city_sel != "All":
+        df_filtered = df_filtered[df_filtered["City"] == city_sel]
+
+    start_date, end_date = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
+    df_filtered = df_filtered[(df_filtered["Date"] >= start_date) & (df_filtered["Date"] <= end_date)]
+
+    # ================================
+    # Summary Stats Cards
+    # ================================
+    st.subheader("📌 Summary Statistics")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Total Rows", f"{len(df_filtered):,}")
+    col2.metric("Date Range", f"{start_date.date()} → {end_date.date()}")
+    col3.metric("Total Cities", df_filtered["City"].nunique())
+    col4.metric("Avg AQI", f"{df_filtered['AQI'].mean():.2f}")
+
+    # ================================
+    # Data Preview Table
+    # ================================
+    st.subheader("📄 Filtered Dataset Preview")
+
+    if highlight_col != "None":
+        # Highlight selected pollutant column
+        def highlight_column(x):
+            return ['background-color: #2a2a9e' if col == highlight_col else '' for col in x.index]
+        st.dataframe(df_filtered.head(50).style.apply(highlight_column, axis=1))
+    else:
+        st.dataframe(df_filtered.head(50))
+
+    # ================================
+    # Summary Table
+    # ================================
+    st.subheader("📈 Statistical Summary")
+    st.dataframe(df_filtered.describe().T)
+
+    # ================================
+    # Quick Insights
+    # ================================
+    st.subheader("🔍 Insights")
+
+    top_city = df_filtered.groupby("City")["AQI"].mean().sort_values(ascending=False).head(1)
+    worst_city = top_city.index[0]
+    worst_value = top_city.values[0]
+
+    st.markdown(f"""
+    - 🌆 **Most polluted city in selection:** `{worst_city}` (Avg AQI = {worst_value:.2f})  
+    - 🕒 Data spans from **{start_date.date()}** to **{end_date.date()}**  
+    - 📌 Showing **{len(df_filtered):,} rows** from **{df_filtered['City'].nunique()} cities**
+    """)
+
+    # ================================
+    # Download Button
+    # ================================
+    st.subheader("⬇️ Download Filtered Data")
+    csv = df_filtered.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download CSV",
+        data=csv,
+        file_name="filtered_air_quality.csv",
+        mime="text/csv"
+    )
 
 # -----------------------------
 # EDA
